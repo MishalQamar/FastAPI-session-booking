@@ -1,0 +1,45 @@
+name: CI Python docker image
+
+on:
+  push:
+    branches:
+      - main
+
+jobs:
+  build-python-ci-image:
+    runs-on: ubuntu-latest
+
+    env:
+      DOCKER_DRIVER: overlay2
+      DOCKER_TLS_CERTDIR: ""
+
+    services:
+      docker:
+        image: docker:24.0.6-dind
+        options: --privileged
+        ports:
+          - 2375:2375
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Restore cache
+        uses: actions/cache@v4
+        with:
+          path: services/session_booking/.venv
+          key: build-python-ci-image
+
+      - name: Login to GitHub Container Registry
+        run: |
+          echo "${{ secrets.GITHUB_TOKEN }}" | docker login ghcr.io -u "${{ github.actor }}" --password-stdin
+
+      - name: Build Docker image
+        run: |
+          docker build \
+            -t ghcr.io/mishalqamar/session-booking:cicd-python3.11-slim \
+            ci_cd/python
+
+      - name: Push Docker image
+        run: |
+          docker push ghcr.io/mishalqamar/session-booking:cicd-python3.11-slim
