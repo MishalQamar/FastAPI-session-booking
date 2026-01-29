@@ -275,7 +275,7 @@ jobs:
           cd ${{ env.TF_ROOT }}
           terraform validate
 
-  # ---------- vpc-plan: plan + plan JSON artifact (like GitLab vpc-plan) ----------
+  # ---------- vpc-plan: plan + plan JSON artifact 
   terraform-vpc-plan:
     name: Terraform VPC – Plan
     runs-on: ubuntu-latest
