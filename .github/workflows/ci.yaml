@@ -68,11 +68,12 @@ jobs:
       - name: Run code quality and tests in container
         run: |
           docker run --rm \
+            --user root \
             -v ${{ github.workspace }}/services/session_booking:/app \
             ghcr.io/mishalqamar/session-booking:cicd-python3.11-slim \
             sh -c "\
               cd /app && \
-              uv install && \          # Install all dependencies via uv
+              uv sync --group dev && \          # Install all dependencies via uv
               uv run flake8 . && \     # Linting
               uv run black . --check && \  # Code formatting check
               uv run isort . --check-only --profile black && \  # Imports
