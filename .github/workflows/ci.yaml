@@ -1,16 +1,20 @@
 name: CI Python Docker Image
 
+# Trigger workflow on pushes to main branch
 on:
   push:
     branches:
       - main
 
+# Permissions for pushing Docker images to GitHub Container Registry
 permissions:
   contents: read
   packages: write
 
 jobs:
+  # -------------------- Docker Stage --------------------
   build-python-ci-image:
+    name: Build and Push Docker Image
     runs-on: ubuntu-latest
 
     env:
@@ -18,12 +22,15 @@ jobs:
       DOCKER_TLS_CERTDIR: ""
 
     steps:
+      # Step 1: Checkout repository code
       - name: Checkout code
         uses: actions/checkout@v4
 
+      # Step 2: Setup Docker Buildx (advanced builder)
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
 
+      # Step 3: Login to GitHub Container Registry
       - name: Login to GitHub Container Registry
         uses: docker/login-action@v2
         with:
@@ -31,12 +38,44 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
+      # Step 4: Build Docker image
       - name: Build Docker image
         run: |
           docker build \
             -t ghcr.io/mishalqamar/session-booking:cicd-python3.11-slim \
             ci_cd/python
 
+      # Step 5: Push Docker image
       - name: Push Docker image
         run: |
           docker push ghcr.io/mishalqamar/session-booking:cicd-python3.11-slim
+
+  # -------------------- Test / Code Quality Stage --------------------
+  service-session-booking-code-quality:
+    name: Run Code Quality Checks
+    runs-on: ubuntu-latest
+
+    # Ensure this job runs only after Docker image is ready
+    needs: build-python-ci-image
+
+    steps:
+      # Step 1: Checkout repository code
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      # Step 2: Run tests inside the Docker image we just built
+      # The image already has Python and UV installed 
+      - name: Run code quality and tests in container
+        run: |
+          docker run --rm \
+            -v ${{ github.workspace }}/services/session_booking:/app \
+            ghcr.io/mishalqamar/session-booking:cicd-python3.11-slim \
+            sh -c "\
+              cd /app && \
+              uv install && \          # Install all dependencies via uv
+              uv run flake8 . && \     # Linting
+              uv run black . --check && \  # Code formatting check
+              uv run isort . --check-only --profile black && \  # Imports
+              uv run bandit . && \      # Security check
+              uv run safety check       # Vulnerability scan
+            "
