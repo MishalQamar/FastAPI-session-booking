@@ -1,0 +1,21 @@
+name: Terraform VPC
+
+on:
+  pull_request:
+    paths:
+      - infrastructure/global/vpc/**
+  push:
+    branches:
+      - main
+    paths:
+      - infrastructure/global/vpc/**
+  workflow_dispatch: {}
+
+jobs:
+  # Terraform validate/plan/apply live in ci.yaml (CI Python Docker Image + Terraform).
+  # This file exists only to satisfy workflow_dispatch or separate triggers if needed.
+  noop:
+    name: No-op (see main CI)
+    runs-on: ubuntu-latest
+    steps:
+      - run: echo "Terraform VPC runs in the main CI workflow (ci.yaml)."
