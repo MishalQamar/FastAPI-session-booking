@@ -224,11 +224,16 @@ jobs:
   #    certain the plan is correct and the time is right (infra changes are
   #    risky and long-running).
   #
+  # Rules (same as GitLab example):
+  #   - terraform-vpc-validate and terraform-vpc-plan run on push to main AND
+  #     on pull requests, when changes occur in infrastructure/global/vpc/**.
+  #   - terraform-vpc-apply runs only on push to main, when manually triggered
+  #     (approve the "production" environment in the Actions run).
+  #   All three jobs run only when changes occur in infrastructure/global/vpc/**.
+  #
   # GitHub has no "extends" like GitLab .vpc-job; we repeat TF_ROOT, cache,
-  # and env in each job to get the same shared base. Rules: validate and plan
-  # run on main push or PR when infrastructure/global/vpc changes; apply runs
-  # only on main and is manual via environment "production" (Settings →
-  # Environments → production → Required reviewers).
+  # and env in each job. Manual apply = environment "production" + Required
+  # reviewers (Settings → Environments → production).
   # ===========================================================================
 
   # ---------- vpc-validate: init + validate (like GitLab vpc-validate) ----------
