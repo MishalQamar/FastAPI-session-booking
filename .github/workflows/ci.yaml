@@ -316,22 +316,22 @@ jobs:
           cd ${{ env.TF_ROOT }}
           terraform init
 
+      # Terraform Cloud does not support -out=tfplan; plan runs in TFC. We capture
+      # human-readable and JSON output for review only (apply job runs plan+apply itself).
       - name: Terraform Plan
         run: |
           cd ${{ env.TF_ROOT }}
-          terraform plan -out=tfplan -no-color
+          terraform plan -no-color
       - name: Terraform Plan JSON
         run: |
           cd ${{ env.TF_ROOT }}
-          terraform show -json tfplan > plan.json
+          terraform plan -json > plan.json
 
       - name: Upload plan artifact
         uses: actions/upload-artifact@v4
         with:
           name: vpc-plan
-          path: |
-            ${{ env.TF_ROOT }}/tfplan
-            ${{ env.TF_ROOT }}/plan.json
+          path: ${{ env.TF_ROOT }}/plan.json
 
   # ---------- vpc-apply: apply only on main, manual via environment ----------
   # Manual trigger: infra updates are risky and long-running; run apply only
@@ -361,17 +361,6 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@v4
 
-      - name: Download plan artifact
-        uses: actions/download-artifact@v4
-        with:
-          name: vpc-plan
-
-      # Artifact contents land in ./vpc-plan/ (tfplan, plan.json); move to TF_ROOT.
-      - name: Move plan into TF_ROOT
-        run: |
-          mkdir -p ${{ env.TF_ROOT }}
-          mv vpc-plan/tfplan vpc-plan/plan.json ${{ env.TF_ROOT }}/
-
       - name: Restore Terraform cache
         uses: actions/cache@v4
         with:
@@ -390,7 +379,8 @@ jobs:
           cd ${{ env.TF_ROOT }}
           terraform init
 
+      # Terraform Cloud does not use a local plan file; apply runs plan+apply in TFC.
       - name: Terraform Apply
         run: |
           cd ${{ env.TF_ROOT }}
-          terraform apply -auto-approve tfplan
+          terraform apply -auto-approve
