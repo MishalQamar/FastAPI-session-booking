@@ -1,13 +1,19 @@
 name: CI Python Docker Image
 
-# Trigger workflow on pushes to main branch or PRs
+# Trigger on push to main or PRs targeting main; only when relevant paths change
 on:
   push:
     branches:
       - main
+    paths:
+      - 'ci_cd/python/Dockerfile'
+      - 'services/session_booking/**'
   pull_request:
     branches:
       - main
+    paths:
+      - 'ci_cd/python/Dockerfile'
+      - 'services/session_booking/**'
 
 # Permissions for pushing Docker images to GitHub Container Registry
 permissions:
@@ -15,13 +21,31 @@ permissions:
   packages: write
 
 jobs:
+  # -------------------- Detect which paths changed --------------------
+  detect-changes:
+    name: Detect changed paths
+    runs-on: ubuntu-latest
+    outputs:
+      dockerfile: ${{ steps.filter.outputs.dockerfile }}
+      service: ${{ steps.filter.outputs.service }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dorny/paths-filter@v3
+        id: filter
+        with:
+          filters: |
+            dockerfile:
+              - 'ci_cd/python/Dockerfile'
+            service:
+              - 'services/session_booking/**'
+
   # -------------------- Docker Stage --------------------
+  # Runs only on push to main when Dockerfile changed
   build-python-ci-image:
     name: Build and Push Docker Image
     runs-on: ubuntu-latest
-
-    # Only run if Dockerfile changes
-    if: contains(github.event.head_commit.message, 'Dockerfile') || github.ref == 'refs/heads/main'
+    needs: detect-changes
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main' && needs.detect-changes.outputs.dockerfile == 'true'
 
     env:
       DOCKER_DRIVER: overlay2
@@ -51,18 +75,20 @@ jobs:
         run: |
           docker push ghcr.io/mishalqamar/session-booking:cicd-python3.11-slim
 
-  # -------------------- Test / Code Quality Stage --------------------
+  # -------------------- Code Quality --------------------
+  # Runs on main or PR when services/session_booking/** changed
   service-session-booking-code-quality:
     name: Run Code Quality Checks
     runs-on: ubuntu-latest
-    needs: build-python-ci-image
-
-    # Only run if any file in the service folder changes
-    if: github.ref == 'refs/heads/main' || github.event_name == 'pull_request'
+    needs: detect-changes
+    if: needs.detect-changes.outputs.service == 'true'
 
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
+
+      - name: Pull CI Docker image
+        run: docker pull ghcr.io/mishalqamar/session-booking:cicd-python3.11-slim
 
       - name: Run code quality and checks in container
         run: |
@@ -80,13 +106,13 @@ jobs:
               uv run safety check
             "
 
+  # -------------------- Tests --------------------
+  # Runs on main or PR when services/session_booking/** changed
   tests:
     name: Run Unit & Integration Tests
     runs-on: ubuntu-latest
-    needs: build-python-ci-image  # Run after Docker image is ready
-
-    # Only run if main branch or pull request, and files changed in service folder
-    if: github.ref == 'refs/heads/main' || github.event_name == 'pull_request'
+    needs: detect-changes
+    if: needs.detect-changes.outputs.service == 'true'
 
     defaults:
       run:
