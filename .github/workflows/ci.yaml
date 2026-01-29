@@ -1,8 +1,11 @@
 name: CI Python Docker Image
 
-# Trigger workflow on pushes to main branch
+# Trigger workflow on pushes to main branch or PRs
 on:
   push:
+    branches:
+      - main
+  pull_request:
     branches:
       - main
 
@@ -17,20 +20,20 @@ jobs:
     name: Build and Push Docker Image
     runs-on: ubuntu-latest
 
+    # Only run if Dockerfile changes
+    if: contains(github.event.head_commit.message, 'Dockerfile') || github.ref == 'refs/heads/main'
+
     env:
       DOCKER_DRIVER: overlay2
       DOCKER_TLS_CERTDIR: ""
 
     steps:
-      # Step 1: Checkout repository code
       - name: Checkout code
         uses: actions/checkout@v4
 
-      # Step 2: Setup Docker Buildx (advanced builder)
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
 
-      # Step 3: Login to GitHub Container Registry
       - name: Login to GitHub Container Registry
         uses: docker/login-action@v2
         with:
@@ -38,14 +41,12 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
-      # Step 4: Build Docker image
       - name: Build Docker image
         run: |
           docker build \
             -t ghcr.io/mishalqamar/session-booking:cicd-python3.11-slim \
             ci_cd/python
 
-      # Step 5: Push Docker image
       - name: Push Docker image
         run: |
           docker push ghcr.io/mishalqamar/session-booking:cicd-python3.11-slim
@@ -54,18 +55,16 @@ jobs:
   service-session-booking-code-quality:
     name: Run Code Quality Checks
     runs-on: ubuntu-latest
-
-    # Ensure this job runs only after Docker image is ready
     needs: build-python-ci-image
 
+    # Only run if any file in the service folder changes
+    if: github.ref == 'refs/heads/main' || github.event_name == 'pull_request'
+
     steps:
-      # Step 1: Checkout repository code
       - name: Checkout code
         uses: actions/checkout@v4
 
-      # Step 2: Run tests inside the Docker image we just built
-      # The image already has Python and UV installed 
-      - name: Run code quality and tests in container
+      - name: Run code quality and checks in container
         run: |
           docker run --rm \
             --user root \
@@ -73,19 +72,20 @@ jobs:
             ghcr.io/mishalqamar/session-booking:cicd-python3.11-slim \
             sh -c "\
               cd /app && \
-              uv sync --group dev && \          # Install all dependencies via uv
-              uv run flake8 . && \     # Linting
-              uv run black . --check && \  # Code formatting check
-              uv run isort . --check-only --profile black && \  # Imports
-              uv run bandit . && \      # Security check
-              uv run safety check       # Vulnerability scan
+              uv sync --group dev && \
+              uv run flake8 . && \
+              uv run black . --check && \
+              uv run isort . --check-only --profile black && \
+              uv run bandit . && \
+              uv run safety check
             "
- 
+
   tests:
     name: Run Unit & Integration Tests
     runs-on: ubuntu-latest
-    needs: build-python-ci-image  # Runs in parallel with code-quality after image is built
+    needs: build-python-ci-image  # Run after Docker image is ready
 
+    # Only run if main branch or pull request, and files changed in service folder
     if: github.ref == 'refs/heads/main' || github.event_name == 'pull_request'
 
     defaults:
@@ -101,7 +101,7 @@ jobs:
         with:
           version: "latest"
 
-      # Restore virtual environment cache
+      # Restore cached virtual environment
       - name: Restore .venv cache
         uses: actions/cache@v4
         with:
