@@ -80,3 +80,51 @@ jobs:
               uv run bandit . && \      # Security check
               uv run safety check       # Vulnerability scan
             "
+ 
+  tests:
+    name: Run Unit & Integration Tests
+    runs-on: ubuntu-latest
+    needs: build-python-ci-image  # Runs in parallel with code-quality after image is built
+
+    if: github.ref == 'refs/heads/main' || github.event_name == 'pull_request'
+
+    defaults:
+      run:
+        working-directory: services/session_booking
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v4
+        with:
+          version: "latest"
+
+      # Restore virtual environment cache
+      - name: Restore .venv cache
+        uses: actions/cache@v4
+        with:
+          path: services/session_booking/.venv
+          key: tests-${{ github.sha }}
+
+      # Install dependencies using uv
+      - name: Install dependencies
+        run: uv sync --group dev
+
+      # Run tests with pytest
+      - name: Run tests
+        run: uv run python -m pytest --junitxml=report.xml --cov=./ --cov-report=xml tests/unit tests/integration
+
+      # Upload coverage to Codecov
+      - name: Upload coverage to Codecov
+        uses: codecov/codecov-action@v4
+        with:
+          token: ${{ secrets.CODECOV_TOKEN }}
+
+      # Upload JUnit test report as artifact
+      - name: Upload test report
+        uses: actions/upload-artifact@v3
+        with:
+          name: junit-report
+          path: services/session_booking/report.xml
