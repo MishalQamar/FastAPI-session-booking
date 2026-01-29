@@ -1,6 +1,18 @@
-name: CI Python Docker Image
+# =============================================================================
+# CI: Python Docker Image + Code Quality + Tests + Terraform VPC
+# =============================================================================
+# Runs on push to main and on pull requests targeting main, but only when
+# relevant paths change (Dockerfile, session_booking service, or VPC infra).
+# =============================================================================
+name: CI Python Docker Image + Terraform
 
-# Trigger on push to main or PRs targeting main; only when relevant paths change
+# -----------------------------------------------------------------------------
+# Triggers
+# -----------------------------------------------------------------------------
+# Push: run when code is pushed to main and touched paths match below.
+# Pull request: run when a PR targets main and touched paths match below.
+# Path filters avoid unnecessary runs when only unrelated files change.
+# -----------------------------------------------------------------------------
 on:
   push:
     branches:
@@ -8,29 +20,49 @@ on:
     paths:
       - 'ci_cd/python/Dockerfile'
       - 'services/session_booking/**'
+      - 'infrastructure/global/vpc/**'
   pull_request:
     branches:
       - main
     paths:
       - 'ci_cd/python/Dockerfile'
       - 'services/session_booking/**'
+      - 'infrastructure/global/vpc/**'
 
-# Permissions for pushing Docker images to GitHub Container Registry
+# -----------------------------------------------------------------------------
+# Permissions
+# -----------------------------------------------------------------------------
+# contents: read — required to checkout repo and read workflow files.
+# packages: write — required to push Docker images to GitHub Container Registry.
+# -----------------------------------------------------------------------------
 permissions:
   contents: read
   packages: write
 
 jobs:
-  # -------------------- Detect which paths changed --------------------
+  # ===========================================================================
+  # Job: detect-changes — Determine which parts of the repo changed
+  # ===========================================================================
+  # Uses paths-filter to set outputs (dockerfile, service, terraform) so
+  # downstream jobs run only when relevant code changed. Reduces CI time and
+  # resource usage.
+  # ===========================================================================
   detect-changes:
     name: Detect changed paths
     runs-on: ubuntu-latest
     outputs:
       dockerfile: ${{ steps.filter.outputs.dockerfile }}
       service: ${{ steps.filter.outputs.service }}
+      terraform: ${{ steps.filter.outputs.terraform }}
     steps:
-      - uses: actions/checkout@v4
-      - uses: dorny/paths-filter@v3
+      # Check out the repository so paths-filter can diff against the base ref.
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      # Evaluate path filters; sets outputs dockerfile, service, terraform
+      # to "true" or "false" based on changed files in this run.
+      - name: Evaluate path filters
+        uses: dorny/paths-filter@v3
         id: filter
         with:
           filters: |
@@ -38,9 +70,15 @@ jobs:
               - 'ci_cd/python/Dockerfile'
             service:
               - 'services/session_booking/**'
+            terraform:
+              - 'infrastructure/global/vpc/**'
 
-  # -------------------- Docker Stage --------------------
-  # Runs only on push to main when Dockerfile changed
+  # ===========================================================================
+  # Job: build-python-ci-image — Build and push the CI Docker image
+  # ===========================================================================
+  # Runs only on push to main when the Dockerfile changed. Builds the image
+  # used by code-quality and other jobs, then pushes to GHCR.
+  # ===========================================================================
   build-python-ci-image:
     name: Build and Push Docker Image
     runs-on: ubuntu-latest
@@ -55,9 +93,11 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@v4
 
+      # Enable Buildx for multi-platform and cache support (we use default build).
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
 
+      # Authenticate to GitHub Container Registry so we can push the image.
       - name: Login to GitHub Container Registry
         uses: docker/login-action@v2
         with:
@@ -65,18 +105,24 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
+      # Build the CI image from ci_cd/python (uses Dockerfile there).
       - name: Build Docker image
         run: |
           docker build \
             -t ghcr.io/mishalqamar/session-booking:cicd-python3.11-slim \
             ci_cd/python
 
+      # Push the built image to GHCR for use in other workflows/jobs.
       - name: Push Docker image
         run: |
           docker push ghcr.io/mishalqamar/session-booking:cicd-python3.11-slim
 
-  # -------------------- Code Quality --------------------
-  # Runs on main or PR when services/session_booking/** changed
+  # ===========================================================================
+  # Job: service-session-booking-code-quality — Lint and security checks
+  # ===========================================================================
+  # Runs when session_booking code or Dockerfile changed. Uses the CI Docker
+  # image and runs flake8, black, isort, bandit, and safety inside a container.
+  # ===========================================================================
   service-session-booking-code-quality:
     name: Run Code Quality Checks
     runs-on: ubuntu-latest
@@ -87,9 +133,13 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@v4
 
+      # Pull the same image we build in build-python-ci-image (or pre-existing).
       - name: Pull CI Docker image
         run: docker pull ghcr.io/mishalqamar/session-booking:cicd-python3.11-slim
 
+      # Mount session_booking into the container and run all code quality tools.
+      # flake8: style/errors; black: format; isort: import order; bandit: security;
+      # safety: known vulnerable dependencies.
       - name: Run code quality and checks in container
         run: |
           docker run --rm \
@@ -106,8 +156,12 @@ jobs:
               uv run safety check
             "
 
-  # -------------------- Tests --------------------
-  # Runs on main or PR when services/session_booking/** changed
+  # ===========================================================================
+  # Job: tests — Unit and integration tests with coverage
+  # ===========================================================================
+  # Runs when session_booking code changed. Installs deps with uv, runs pytest,
+  # uploads coverage to Codecov and JUnit report as an artifact.
+  # ===========================================================================
   tests:
     name: Run Unit & Integration Tests
     runs-on: ubuntu-latest
@@ -127,30 +181,213 @@ jobs:
         with:
           version: "latest"
 
-      # Restore cached virtual environment
+      # Cache key from lock file + pyproject so we get hits when deps unchanged.
+      # Using github.sha would create a new key every run and defeat caching.
       - name: Restore .venv cache
         uses: actions/cache@v4
         with:
           path: services/session_booking/.venv
-          key: tests-${{ github.sha }}
+          key: tests-venv-${{ runner.os }}-${{ hashFiles('services/session_booking/pyproject.toml', 'services/session_booking/uv.lock') }}
+          restore-keys: |
+            tests-venv-${{ runner.os }}-
 
-      # Install dependencies using uv
+      # Install project and dev dependencies so pytest and coverage are available.
       - name: Install dependencies
         run: uv sync --group dev
 
-      # Run tests with pytest
+      # Run unit and integration tests with JUnit XML and coverage XML for reports.
       - name: Run tests
         run: uv run python -m pytest --junitxml=report.xml --cov=./ --cov-report=xml tests/unit tests/integration
 
-      # Upload coverage to Codecov
+      # Upload coverage to Codecov; path is relative to repo root (job has working-directory).
       - name: Upload coverage to Codecov
         uses: codecov/codecov-action@v4
         with:
           token: ${{ secrets.CODECOV_TOKEN }}
+          files: services/session_booking/coverage.xml
 
-      # Upload JUnit test report as artifact
+      # Persist JUnit report so it can be used by GitHub Actions and other tools.
       - name: Upload test report
         uses: actions/upload-artifact@v4
         with:
           name: junit-report
           path: services/session_booking/report.xml
+
+  # ===========================================================================
+  # Terraform VPC — Standard three-step flow: validate → plan → apply (manual)
+  # ===========================================================================
+  # 1. VALIDATE: Checks config for syntax errors, missing attributes, wrong
+  #    values, and bad resource references. No changes to infra.
+  # 2. PLAN: Builds a plan of what would change to reach desired state. Review
+  #    the "Terraform VPC – Plan" job output to see create/update/destroy.
+  # 3. APPLY: Actually updates resources. Manual so you run it only when you're
+  #    certain the plan is correct and the time is right (infra changes are
+  #    risky and long-running).
+  #
+  # GitHub has no "extends" like GitLab .vpc-job; we repeat TF_ROOT, cache,
+  # and env in each job to get the same shared base. Rules: validate and plan
+  # run on main push or PR when infrastructure/global/vpc changes; apply runs
+  # only on main and is manual via environment "production" (Settings →
+  # Environments → production → Required reviewers).
+  # ===========================================================================
+
+  # ---------- vpc-validate: init + validate (like GitLab vpc-validate) ----------
+  terraform-vpc-validate:
+    name: Terraform VPC – Validate
+    runs-on: ubuntu-latest
+    needs: detect-changes
+    if: |
+      needs.detect-changes.outputs.terraform == 'true' &&
+      (github.event_name == 'push' && github.ref == 'refs/heads/main' ||
+       github.event_name == 'pull_request')
+
+    env:
+      TF_ROOT: infrastructure/global/vpc
+      AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
+      AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+      AWS_DEFAULT_REGION: ${{ secrets.AWS_REGION }}
+      TF_API_TOKEN: ${{ secrets.TF_API_TOKEN }}
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Restore Terraform cache
+        uses: actions/cache@v4
+        with:
+          path: ${{ env.TF_ROOT }}/.terraform
+          key: vpc-${{ runner.os }}-${{ hashFiles('infrastructure/global/vpc/**/*.tf') }}
+          restore-keys: |
+            vpc-${{ runner.os }}-
+
+      - name: Setup Terraform
+        uses: hashicorp/setup-terraform@v2
+        with:
+          terraform_version: "1.5.1"
+
+      - name: Terraform Init
+        run: |
+          cd ${{ env.TF_ROOT }}
+          terraform init
+
+      - name: Terraform Validate
+        run: |
+          cd ${{ env.TF_ROOT }}
+          terraform validate
+
+  # ---------- vpc-plan: plan + plan JSON artifact (like GitLab vpc-plan) ----------
+  terraform-vpc-plan:
+    name: Terraform VPC – Plan
+    runs-on: ubuntu-latest
+    needs: [detect-changes, terraform-vpc-validate]
+    if: |
+      needs.detect-changes.outputs.terraform == 'true' &&
+      (github.event_name == 'push' && github.ref == 'refs/heads/main' ||
+       github.event_name == 'pull_request')
+
+    env:
+      TF_ROOT: infrastructure/global/vpc
+      AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
+      AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+      AWS_DEFAULT_REGION: ${{ secrets.AWS_REGION }}
+      TF_API_TOKEN: ${{ secrets.TF_API_TOKEN }}
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Restore Terraform cache
+        uses: actions/cache@v4
+        with:
+          path: ${{ env.TF_ROOT }}/.terraform
+          key: vpc-${{ runner.os }}-${{ hashFiles('infrastructure/global/vpc/**/*.tf') }}
+          restore-keys: |
+            vpc-${{ runner.os }}-
+
+      - name: Setup Terraform
+        uses: hashicorp/setup-terraform@v2
+        with:
+          terraform_version: "1.5.1"
+
+      - name: Terraform Init
+        run: |
+          cd ${{ env.TF_ROOT }}
+          terraform init
+
+      - name: Terraform Plan
+        run: |
+          cd ${{ env.TF_ROOT }}
+          terraform plan -out=tfplan -no-color
+      - name: Terraform Plan JSON
+        run: |
+          cd ${{ env.TF_ROOT }}
+          terraform show -json tfplan > plan.json
+
+      - name: Upload plan artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: vpc-plan
+          path: |
+            ${{ env.TF_ROOT }}/tfplan
+            ${{ env.TF_ROOT }}/plan.json
+
+  # ---------- vpc-apply: apply only on main, manual via environment ----------
+  # Manual trigger: infra updates are risky and long-running; run apply only
+  # when the plan looks good and you're ready. In GitHub we use environment:
+  # production + Required reviewers so someone must approve before apply runs.
+  # ----------
+  terraform-vpc-apply:
+    name: Terraform VPC – Apply
+    runs-on: ubuntu-latest
+    needs: [detect-changes, terraform-vpc-plan]
+    if: |
+      needs.detect-changes.outputs.terraform == 'true' &&
+      github.event_name == 'push' &&
+      github.ref == 'refs/heads/main'
+
+    environment: production
+
+    env:
+      TF_ROOT: infrastructure/global/vpc
+      AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
+      AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+      AWS_DEFAULT_REGION: ${{ secrets.AWS_REGION }}
+      TF_API_TOKEN: ${{ secrets.TF_API_TOKEN }}
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Download plan artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: vpc-plan
+
+      # Artifact contents land in ./vpc-plan/ (tfplan, plan.json); move to TF_ROOT.
+      - name: Move plan into TF_ROOT
+        run: |
+          mkdir -p ${{ env.TF_ROOT }}
+          mv vpc-plan/tfplan vpc-plan/plan.json ${{ env.TF_ROOT }}/
+
+      - name: Restore Terraform cache
+        uses: actions/cache@v4
+        with:
+          path: ${{ env.TF_ROOT }}/.terraform
+          key: vpc-${{ runner.os }}-${{ hashFiles('infrastructure/global/vpc/**/*.tf') }}
+          restore-keys: |
+            vpc-${{ runner.os }}-
+
+      - name: Setup Terraform
+        uses: hashicorp/setup-terraform@v2
+        with:
+          terraform_version: "1.5.1"
+
+      - name: Terraform Init
+        run: |
+          cd ${{ env.TF_ROOT }}
+          terraform init
+
+      - name: Terraform Apply
+        run: |
+          cd ${{ env.TF_ROOT }}
+          terraform apply -auto-approve tfplan
