@@ -1,5 +1,5 @@
 output "vpc_id" {
-  value = aws_vpc.talk-booking-vpc.id
+  value = aws_vpc.session-booking-vpc.id
 }
 
 output "ecs_security_group_id" {
