@@ -11,8 +11,8 @@ terraform {
       name = "vpc-global"         # Create this workspace in the org (CLI-driven)
     }
   }
+}
 
-  provider "aws" {
-    region = var.region
-  }
+provider "aws" {
+  region = var.region
 }
