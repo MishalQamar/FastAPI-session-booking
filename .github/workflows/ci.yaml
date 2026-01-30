@@ -28,6 +28,8 @@ on:
       - 'ci_cd/python/Dockerfile'
       - 'services/session_booking/**'
       - 'infrastructure/global/vpc/**'
+  # Run workflow manually to execute Terraform VPC Apply (e.g. after reviewing plan).
+  workflow_dispatch:
 
 # -----------------------------------------------------------------------------
 # Permissions
@@ -338,21 +340,15 @@ jobs:
           name: vpc-plan
           path: ${{ env.TF_ROOT }}/plan.json
 
-  # ---------- vpc-apply: apply only on main, manual via environment ----------
-  # Manual trigger: infra updates are risky and long-running; run apply only
-  # when the plan looks good and you're ready. In GitHub we use environment:
-  # production + Required reviewers so someone must approve before apply runs.
+  # ---------- vpc-apply: manual only (workflow_dispatch) ----------
+  # Apply does not run on push. When validate/plan finish, run this workflow
+  # manually from Actions → "CI Python Docker Image + Terraform" → Run workflow.
   # ----------
   terraform-vpc-apply:
     name: Terraform VPC – Apply
     runs-on: ubuntu-latest
-    needs: [detect-changes, terraform-vpc-plan]
-    if: |
-      needs.detect-changes.outputs.terraform == 'true' &&
-      github.event_name == 'push' &&
-      github.ref == 'refs/heads/main'
-
-    environment: production
+    if: github.event_name == 'workflow_dispatch'
+    needs: []
 
     env:
       TF_ROOT: infrastructure/global/vpc
